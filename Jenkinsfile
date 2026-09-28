@@ -11,11 +11,14 @@ pipeline {
     environment {
         IMAGE_NAME = 'spring-boot-jenkins-devops'
         IMAGE_TAG  = "build-${BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'nocommit'}"
-        // 容器内 server.port 与宿主机映射端口统一为 8081
+
+        // 容器内与应用对外端口统一为 8081
         APP_PORT   = '8081'
+
         HOST       = '192.168.128.41'
         USER       = 'root'
         WORK_DIR   = '/home/sanopll/MLops/jenkins-file/jenkins-maven'
+
         SSH_OPTS   = '-o StrictHostKeyChecking=no -o ConnectTimeout=10'
         SSH_TARGET = "${USER}@${HOST}"
     }
@@ -25,6 +28,7 @@ pipeline {
             steps {
                 checkout scm
                 sh 'git rev-parse --short HEAD'
+                sh 'echo "当前 GIT_BRANCH=${GIT_BRANCH}"'
                 sh 'git status -s'
             }
         }
@@ -33,6 +37,7 @@ pipeline {
             steps {
                 sshagent(credentials: ['k8s-master-ssh']) {
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'mkdir -p ${WORK_DIR}'"
+                    // rsync 缺失时退化为 scp
                     sh "rsync -av --delete --exclude '.git' -e \"ssh ${SSH_OPTS}\" ./ ${SSH_TARGET}:${WORK_DIR}/ || scp -r ${SSH_OPTS} ./* ${SSH_TARGET}:${WORK_DIR}/"
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'cd ${WORK_DIR} && ls -la target/ 2>/dev/null || echo target not built yet'"
                 }
@@ -42,16 +47,18 @@ pipeline {
         stage('宿主机构建并测试') {
             steps {
                 sshagent(credentials: ['k8s-master-ssh']) {
-                    // mvn package 已包含 test，单条命令即可，无需再单独跑 mvn test
+                    // mvn package 生命周期已包含 test，无需再单独跑 mvn test
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'cd ${WORK_DIR} && mvn -B -Dmaven.repo.local=/root/.m2 clean package'"
                 }
             }
             post {
                 always {
                     sshagent(credentials: ['k8s-master-ssh']) {
-                        sh "scp ${SSH_OPTS} ${SSH_TARGET}:${WORK_DIR}/target/surefire-reports/*.xml . || true"
+                        // 关键：先保存到 Jenkins 工作空间，否则 junit 步骤读不到
+                        sh "mkdir -p ${WORKSPACE}/target/surefire-reports"
+                        sh "scp ${SSH_OPTS} '${SSH_TARGET}:${WORK_DIR}/target/surefire-reports/*.xml' ${WORKSPACE}/target/surefire-reports/ || true"
                     }
-                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
+                    junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
                 }
             }
         }
@@ -66,17 +73,24 @@ pipeline {
         }
 
         stage('部署并验证') {
-            when { branch 'main' }
+            // 放宽分支判断，避免 origin/main 等写法导致部署被跳过
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'origin/main'
+                    expression { env.GIT_BRANCH?.contains('main') }
+                }
+            }
             steps {
                 sshagent(credentials: ['k8s-master-ssh']) {
-                    // 注意端口映射改为 APP_PORT:APP_PORT，与容器内 8081 对应
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker rm -f ${IMAGE_NAME} || true'"
+                    // 端口映射改为 APP_PORT:APP_PORT，与容器内 8081 对齐
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker run -d --name ${IMAGE_NAME} -p ${APP_PORT}:${APP_PORT} --restart unless-stopped ${IMAGE_NAME}:${IMAGE_TAG}'"
                     sh """
                         ssh ${SSH_OPTS} ${SSH_TARGET} 'for i in \$(seq 1 30); do curl -fsS http://localhost:${APP_PORT}/actuator/health >/dev/null && exit 0; sleep 2; done; docker logs --tail 100 ${IMAGE_NAME}; exit 1'
                     """
                 }
-                // 外部访问使用宿主机 IP + APP_PORT
+                // 外部通过宿主机 IP + APP_PORT 访问
                 sh "curl -fsS --connect-timeout 10 http://${HOST}:${APP_PORT}/api/hello"
             }
         }
