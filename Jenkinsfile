@@ -12,8 +12,8 @@ pipeline {
         IMAGE_NAME = 'spring-boot-jenkins-devops'
         IMAGE_TAG  = "build-${BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'nocommit'}"
 
-        // 容器内与应用对外端口统一为 8081
-        APP_PORT   = '8081'
+       
+        APP_PORT   = '8090'
 
         HOST       = '192.168.128.41'
         USER       = 'root'
@@ -84,7 +84,7 @@ pipeline {
             steps {
                 sshagent(credentials: ['k8s-master-ssh']) {
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker rm -f ${IMAGE_NAME} || true'"
-                    // 端口映射改为 APP_PORT:APP_PORT，与容器内 8081 对齐
+                 
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker run -d --name ${IMAGE_NAME} -p ${APP_PORT}:${APP_PORT} --restart unless-stopped ${IMAGE_NAME}:${IMAGE_TAG}'"
                     sh """
                         ssh ${SSH_OPTS} ${SSH_TARGET} 'for i in \$(seq 1 30); do curl -fsS http://localhost:${APP_PORT}/actuator/health >/dev/null && exit 0; sleep 2; done; docker logs --tail 100 ${IMAGE_NAME}; exit 1'
