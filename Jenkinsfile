@@ -71,7 +71,7 @@ pipeline {
 
         HOST       = '192.168.128.41'
         USER       = 'root'
-        WORK_DIR   = '/home/sanopll/MLops/jenkins-file/jenkins-maven'
+        WORK_DIR   = '/home/sanopll/MLops/jenkins-file/work-jenkins'
 
         // ================= Harbor 镜像仓库（按需修改） =================
         HARBOR_REGISTRY = '192.168.128.41:80'   // Harbor 地址，必须带端口
@@ -163,7 +163,9 @@ pipeline {
                 sshagent(credentials: ['k8s-master-ssh']) {
                     sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker rm -f ${IMAGE_NAME} || true'"
                  
-                    sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker run -d --name ${IMAGE_NAME} -p ${APP_PORT}:${APP_PORT} --restart unless-stopped ${IMAGE_NAME}:${IMAGE_TAG}'"
+                    // 从 Harbor 拉取镜像再启动，确保跑的就是刚推上去的那份
+                    sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker pull ${HARBOR_IMAGE}:${IMAGE_TAG}'"
+                    sh "ssh ${SSH_OPTS} ${SSH_TARGET} 'docker run -d --name ${IMAGE_NAME} -p ${APP_PORT}:${APP_PORT} --restart unless-stopped ${HARBOR_IMAGE}:${IMAGE_TAG}'"
                     sh """
                         ssh ${SSH_OPTS} ${SSH_TARGET} 'for i in \$(seq 1 30); do curl -fsS http://localhost:${APP_PORT}/actuator/health >/dev/null && exit 0; sleep 2; done; docker logs --tail 100 ${IMAGE_NAME}; exit 1'
                     """
@@ -176,7 +178,10 @@ pipeline {
 
     post {
         success {
-            echo "流水线成功：${IMAGE_NAME}:${IMAGE_TAG}  http://${HOST}:${APP_PORT}"
+            echo "流水线成功"
+            echo "镜像：${HARBOR_IMAGE}:${IMAGE_TAG}"
+            echo "Harbor：http://${HARBOR_REGISTRY}/harbor/projects/${HARBOR_PROJECT}/repositories/${IMAGE_NAME}"
+            echo "应用：http://${HOST}:${APP_PORT}"
         }
         failure {
             echo "流水线失败：请查看控制台日志 —— ${env.BUILD_URL}"
