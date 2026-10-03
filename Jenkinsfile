@@ -38,7 +38,7 @@ pipeline {
     environment {
         IMAGE_NAME = 'spring-boot-jenkins-devops'
         IMAGE_TAG  = 'v1.0.0'
-        APP_PORT   = '8082'
+        APP_PORT   = '8090'
 
         HOST       = '192.168.128.41'
         USER       = 'root'
