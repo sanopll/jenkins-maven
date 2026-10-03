@@ -13,10 +13,16 @@ def harborBuildPush() {
     sh '''
         set -eu
         curl -fsS -o /dev/null "http://${HARBOR_REGISTRY}/api/v2.0/ping"
-        docker info 2>/dev/null | grep -Fq "${HARBOR_REGISTRY}" || {
+
+        echo "-------- 开始输出 docker info --------"
+        docker info 2>&1 | tee /tmp/dockerinfo.log || true
+        echo "-------- 结束输出 docker info --------"
+
+        grep -Fq "${HARBOR_REGISTRY}" /tmp/dockerinfo.log || {
             echo "Docker daemon 未将 ${HARBOR_REGISTRY} 配置为 insecure registry"
             exit 1
         }
+
         printf '%s' "$HARBOR_SECRET" |
             docker login "$HARBOR_REGISTRY" --username "$HARBOR_ACCOUNT" --password-stdin
         docker build --tag "$FULL_IMAGE" .
